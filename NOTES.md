@@ -1,168 +1,251 @@
-# Commerce Lab POC
+# Commerce Lab POC Notes
 
-## Current State
+This document explains the project in two ways:
 
-This repository is a small npm workspace for experimenting with a commerce application. It currently contains a Next.js web scaffold, a Fastify API with PostgreSQL, Redis, and Kafka integrations, an order-processing worker, and a Docker Compose development stack for PostgreSQL, Redis, and Redpanda. The web UI is still at the foundation stage, but the backend now has a working product and order flow.
+1. A plain-language overview for someone seeing the project for the first time.
+2. A technical reference for developers who need to run, change, or extend it.
+
+The project is a learning-oriented commerce proof of concept. It is intentionally small, but it demonstrates several pieces commonly found in a real online store: a browser interface, an API, a relational database, a cache, an event broker, a background worker, and the beginning of an authentication data model.
+
+## What Has Been Built
+
+### In plain language
+
+A customer can open the web page and see products. They can add products to a cart and place an order. The order is first recorded as `PENDING`. The API sends an event to a message system, and a separate worker receives that event. After a short simulated processing delay, the worker changes the order to `CONFIRMED`. The web page checks the order periodically and displays the updated status.
+
+The application has four main parts:
+
+- **Web app:** The page a customer sees in the browser.
+- **API:** The backend that accepts requests and applies business rules.
+- **Database:** PostgreSQL stores products and orders permanently.
+- **Worker:** A background process that handles order-confirmation events.
+
+Redis makes product-detail reads faster by temporarily remembering recently requested products. Redpanda provides a Kafka-compatible event stream so order processing can happen separately from the original HTTP request.
+
+### What a normal order looks like
+
+1. The browser requests the product list from the API.
+2. The customer adds a product to the cart.
+3. The browser sends `POST /api/orders` with a product ID and quantity.
+4. The API checks that the product exists and creates a `PENDING` order.
+5. The API publishes an `order.created` event to Redpanda.
+6. The API immediately returns the new order to the browser.
+7. The worker consumes the event, waits three seconds to simulate processing, and marks the order `CONFIRMED`.
+8. The browser polls `GET /api/orders/:id` and displays the new status.
+
+This is deliberately asynchronous: the customer does not have to wait for the worker to finish before the API responds.
+
+## Current Status
+
+| Area | Status | Details |
+| --- | --- | --- |
+| Product catalog | Working | Products are listed from PostgreSQL; product details use Redis caching. |
+| Cart | Working | The browser can hold multiple products locally. |
+| Checkout | Working, limited | The current API accepts one product and quantity per order; the page submits the first cart item. |
+| Order creation | Working | Orders are validated, stored as `PENDING`, and published to Redpanda. |
+| Order confirmation | Working | The worker changes matching orders to `CONFIRMED` after three seconds. |
+| Authentication | Data model only | User, role, and account-status tables exist in Prisma, but login and registration routes are not implemented. |
+| Prisma | Partially adopted | Schema, migrations, seed script, and client helper exist; current product/order runtime code still uses `pg`. |
+| Nginx | Available for local proxying | Compose includes a proxy on port `8081`; it forwards browser traffic to the host web app and API container. |
+| Automated tests | Not yet added | Manual API and browser checks are currently the main verification path. |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Browser[Customer browser] -->|localhost:3000| Web[Next.js web app]
+    Web -->|HTTP JSON| API[Fastify API]
+    API -->|products and orders| DB[(PostgreSQL)]
+    API -->|product cache| Redis[(Redis)]
+    API -->|order.created| Events[(Redpanda / Kafka)]
+    Events --> Worker[Order worker]
+    Worker -->|set CONFIRMED| DB
+    Nginx[Nginx :8081] -. optional local proxy .-> Web
+    Nginx -. optional /api proxy .-> API
+```
+
+The web app and API are separate development processes. The browser-facing API origin is controlled by `NEXT_PUBLIC_API_BASE_URL`. For local development, use `http://localhost:4000`; for a deployed frontend, use the deployed API URL. The Nginx configuration is optional and is not required when running the web app and API directly.
 
 ## Repository Layout
 
 ```text
 commerce-lab-poc/
 ├── apps/
-│   ├── api/
-│   │   ├── src/server.ts       # Fastify server and route registration
-│   │   ├── src/routes/         # Product and order endpoints
-│   │   ├── src/init-db.ts      # Tables and seed products
-│   │   ├── src/db.ts           # PostgreSQL pool
-│   │   ├── src/redis.ts        # Redis client
-│   │   └── src/kafka.ts        # Kafka producer
-│   │   ├── prisma/schema.prisma # Prisma model definitions
-│   │   ├── prisma.config.ts     # Prisma schema and migration configuration
-│   │   ├── .env                # Local API/infrastructure connection settings
-│   │   └── package.json        # API dependencies and dev command
 │   ├── web/
-│   │   ├── src/app/page.tsx    # Current Next.js home page
-│   │   ├── src/app/layout.tsx  # Root layout and metadata
-│   │   ├── src/app/globals.css # Tailwind import and global styles
-│   │   └── package.json        # Next.js scripts and dependencies
+│   │   ├── src/app/page.tsx       # Product list, cart, checkout, status polling
+│   │   ├── src/app/layout.tsx     # Root layout and metadata
+│   │   ├── src/app/globals.css    # Global styles and Tailwind import
+│   │   └── .env.local             # Browser-facing API URL
+│   ├── api/
+│   │   ├── src/server.ts          # Fastify startup and route registration
+│   │   ├── src/routes/            # Product and order endpoints
+│   │   ├── src/init-db.ts         # Runtime table creation and product seed
+│   │   ├── src/db.ts              # PostgreSQL pool used by current routes
+│   │   ├── src/lib/prisma.ts      # Prisma client singleton
+│   │   ├── src/redis.ts           # Redis client
+│   │   ├── src/kafka.ts           # Kafka producer
+│   │   ├── prisma/schema.prisma   # Prisma models
+│   │   ├── prisma/migrations/     # Versioned database migrations
+│   │   ├── prisma/seed.ts         # Initial roles seed
+│   │   └── prisma.config.ts       # Prisma schema, migration, and seed config
 │   └── worker/
-│       ├── src/worker.ts       # Consumes order.created events
-│       └── package.json        # Worker commands
-├── nginx/                      # Reserved deployment/proxy area; empty currently
-├── package.json                # Root npm workspace and shared dev commands
-├── package-lock.json           # Locked npm dependency tree
-├── docker-compose.yml          # Optional PostgreSQL, Redis, and Redpanda stack
-├── README.md                   # New-developer setup guide
-└── NOTES.md                    # Project state and learning notes
+│       └── src/worker.ts          # Kafka consumer and order confirmation
+├── nginx/nginx.conf               # Optional reverse-proxy configuration
+├── docker-compose.yml             # PostgreSQL, Redis, Redpanda, API, worker, Nginx
+├── package.json                   # Root npm workspace commands
+├── README.md                      # Quick-start guide
+└── NOTES.md                       # Detailed project explanation
 ```
 
-## Architecture Today
+## Local Services
 
-```mermaid
-flowchart LR
-	Browser[Developer browser] -->|http://localhost:3000| Web[apps/web\nNext.js 16]
-	Web --> API[apps/api\nFastify]
-	API --> Health[GET /health]
-	API --> DB[(PostgreSQL)]
-	API --> Cache[(Redis)]
-	API --> Events[(Redpanda/Kafka)]
-	Events --> Worker[apps/worker\nKafka consumer]
-	Worker --> DB
-	Nginx[nginx/\nreserved] -. not configured .-> Web
-```
+Docker Compose defines these services:
 
-The web app calls the API to load products, create an order for the first cart item, and poll the order status. The backend runtime path is implemented: the API initializes PostgreSQL, reads and caches products, writes orders, publishes `order.created` events, and the worker consumes those events to confirm orders.
-
-## Application Details
-
-### Web: `apps/web`
-
-- Next.js App Router application using React and TypeScript.
-- Development server runs on `http://localhost:3000` by default.
-- The home route is `src/app/page.tsx` and loads products, manages a client-side cart, submits orders, and polls order status.
-- `src/app/layout.tsx` sets the document language, Geist fonts, and generated-app metadata.
-- Tailwind CSS 4 is imported from `src/app/globals.css` through PostCSS.
-- Available commands: `npm run dev`, `npm run build`, `npm run start`, and `npm run lint`.
-
-### API: `apps/api`
-
-- Fastify server with request logging enabled.
-- CORS is enabled for all origins during this early development stage.
-- `GET http://localhost:4000/health` returns:
-
-```json
-{ "status": "ok", "service": "commerce-lab-api" }
-```
-
-- The server loads `apps/api/.env` through `dotenv/config`.
-- The port defaults to `4000` and can be changed with `PORT`, for example `PORT=4100 npm run dev --workspace=apps/api`.
-- `tsx watch` restarts the server when TypeScript source files change.
-- `npm run build` compiles `src/` to `dist/`; `npm run start` runs the compiled server.
-- `initDb()` creates `products` and `orders` tables and seeds three products when the products table is empty.
-- `prisma/schema.prisma` defines matching `products` and `orders` models, and `prisma.config.ts` points Prisma at the schema and future migrations directory.
-- Prisma client generation is available with `npm exec prisma generate --workspace=apps/api`, but the API routes still use the `pg` pool and have not yet migrated to Prisma runtime queries.
-- Product detail requests cache results in Redis for 5 minutes.
-- Order creation validates positive integer `productId` and `quantity`, persists a `PENDING` order, and publishes an `order.created` Kafka event.
-- `NEXT_PUBLIC_API_BASE_URL` configures the browser-facing API origin and defaults to an empty string.
-
-Current API routes:
-
-| Method | Route | Purpose |
+| Service | Host address | Purpose |
 | --- | --- | --- |
-| `GET` | `/health` | API health check |
-| `GET` | `/api/products` | List products |
-| `GET` | `/api/products/:id` | Read a product through the Redis cache |
-| `POST` | `/api/orders` | Create an order and publish an event |
-| `GET` | `/api/orders/:id` | Read an order and its status |
+| PostgreSQL | `localhost:5432` | Products, orders, users, and roles |
+| Redis | `localhost:6379` | Product-detail cache |
+| Redpanda | `localhost:9092` | Kafka-compatible order events |
+| API container | `localhost:4000` | Optional containerized API |
+| Nginx | `localhost:8081` | Optional local reverse proxy |
+| Worker container | no host port | Optional containerized worker |
 
-### Local Infrastructure, Worker, and Nginx
+There are two ways to run the application:
 
-`docker-compose.yml` defines three optional local services:
+- **Recommended for learning and development:** Run only PostgreSQL, Redis, and Redpanda in Docker. Run the web app, API, and worker from the repository with npm so file watching and logs are easy to see.
+- **Container mode:** Run the full Compose stack. This is useful for checking container startup, but it is less convenient for editing source code and requires the container images to be rebuilt after code changes.
 
-| Service | Image | Host port | Intended use |
-| --- | --- | ---: | --- |
-| PostgreSQL | `postgres:16-alpine` | `5433` (container `5432`) | Relational data |
-| Redis | `redis:7-alpine` | `6379` | Cache and transient state |
-| Redpanda | `redpandadata/redpanda:latest` | `9092` | Kafka-compatible events |
+Do not run the host API and the Compose API at the same time: both try to use port `4000`. The same applies to a host worker and a Compose worker consuming the same event stream.
 
-The worker is implemented and consumes `order.created` using the `order-processing` consumer group. It waits 3 seconds to represent processing, then updates the matching order to `CONFIRMED`. The `nginx` directory remains a placeholder with no reverse-proxy rules or deployment manifests.
+## Database and Prisma
 
-### PostgreSQL Volume Initialization
+PostgreSQL is the source of truth for application data. The project currently has a transition between two database approaches:
 
-The Compose file uses the named volume `commerce-lab-poc_postgres_data`. PostgreSQL reads `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` only during first initialization. If an existing volume was created with different credentials, the current API URL (`commerce` user/database) can fail with `role "commerce" does not exist` even though the container environment shows `POSTGRES_USER=commerce`.
+- Existing product and order routes use the `pg` connection pool in `src/db.ts`.
+- Prisma defines the database models, stores versioned migrations, generates a typed client, and seeds roles.
 
-For disposable development data, reset and recreate the volume:
+The Prisma schema currently contains:
 
-```bash
-docker compose down -v
-docker compose up -d postgres
-```
+- `products`: catalog items with name, description, price, and creation time.
+- `orders`: product reference, quantity, total, status, and creation time.
+- `User`: account identity, password hash, verification state, login lockout state, and timestamps.
+- `Role`: role codes such as `CUSTOMER`, `SELLER`, and `ADMIN`.
+- `UserRole`: many-to-many relationship between users and roles.
+- `UserStatus`: `ACTIVE`, `LOCKED`, `SUSPENDED`, and `DELETED`.
 
-This deletes the local database. If data must be preserved, do not remove the volume; recover the credentials used when it was initialized or connect with an existing administrator role and create/update the expected `commerce` role and database.
-
-## Root Workspace Commands
-
-The root `package.json` declares `apps/*` as npm workspaces:
+For a fresh local database, run migrations and seed the initial roles from `apps/api`:
 
 ```bash
-npm install
-npm run dev:web
-npm run dev:api
-npm run dev:worker
+cd apps/api
+npx prisma migrate deploy
+npx prisma db seed
+cd ../..
 ```
 
-Use `npm run dev:worker` after the API and infrastructure are running. Use `docker compose up -d` directly when local infrastructure is needed.
+The API startup still creates the `products` and `orders` tables and inserts three sample products when the product table is empty. Prisma migrations should still be run because they create the newer user and role tables. The Prisma client can be regenerated with:
 
-## Intended Evolution
-
-```mermaid
-flowchart TD
-	User[Customer or operator] --> Web[Next.js web UI]
-	Web --> API[Fastify API]
-	API --> DB[(PostgreSQL)]
-	API --> Cache[(Redis)]
-	API --> Events[(Kafka)]
-	Events --> Worker[Background worker]
-	Worker --> DB
-	Worker --> Cache
-	Nginx[Nginx or edge proxy] --> Web
-	Nginx --> API
+```bash
+npm exec prisma generate --workspace=apps/api
 ```
 
-The web-to-API UI integration, API-to-PostgreSQL, API-to-Redis, API-to-Redpanda, and worker-to-PostgreSQL paths shown above are implemented. Nginx remains future work, and worker-side cache updates are a possible evolution of the current flow.
+Do not commit real database credentials. Use `.env.example` as a template and keep local secrets in ignored `.env` files.
 
-## Suggested Next Steps
+## API Reference
 
-1. Add API and worker tests for the health check, cache behavior, order validation, event publication, and confirmation flow.
-2. Add shared event schemas and stronger error handling around database, Redis, and Kafka failures.
-3. Add environment example files and document production-safe secrets handling.
-4. Add graceful shutdown for Fastify, PostgreSQL, Redis, Kafka producer, and worker consumer.
-5. Expand checkout to submit multiple cart items in one order.
-6. Add Nginx or another deployment proxy only when the deployment topology is defined.
+The API listens on port `4000` by default. All business routes use the `/api` prefix.
+
+| Method | Route | Behavior |
+| --- | --- | --- |
+| `GET` | `/health` | Returns `{ status: "ok", service: "commerce-lab-api" }`. |
+| `GET` | `/api/products` | Returns products ordered by ID. |
+| `GET` | `/api/products/:id` | Returns one product and caches it in Redis for five minutes. |
+| `POST` | `/api/orders` | Validates, creates, and publishes an order. |
+| `GET` | `/api/orders/:id` | Returns one order and its current status. |
+
+Create an order manually:
+
+```bash
+curl -X POST http://localhost:4000/api/orders \
+  -H 'content-type: application/json' \
+  -d '{"productId":1,"quantity":2}'
+```
+
+The request requires positive integer values. A successful response is initially `PENDING`. After the worker processes the event, query the returned ID:
+
+```bash
+curl http://localhost:4000/api/orders/1
+```
+
+The API currently calculates totals from the product price. Prices are stored as integers representing the smallest currency unit used by the UI, and the web page formats them as Indian rupees.
+
+## Environment Variables
+
+### API: `apps/api/.env`
+
+| Variable | Purpose | Local example |
+| --- | --- | --- |
+| `PORT` | API listening port | `4000` |
+| `DATABASE_URL` | PostgreSQL or hosted PostgreSQL connection string | `postgresql://commerce:commerce@localhost:5432/commerce` |
+| `REDIS_URL` | Redis connection string | `redis://localhost:6379` |
+| `KAFKA_BROKERS` | Comma-separated broker list | `localhost:9092` |
+| `KAFKA_USERNAME` | Optional hosted Kafka username | Leave blank locally |
+| `KAFKA_PASSWORD` | Optional hosted Kafka password | Leave blank locally |
+| `KAFKA_CA_CERT` | Optional hosted Kafka certificate path | Leave blank locally unless TLS is used |
+
+### Worker: `apps/worker/.env`
+
+The worker needs `DATABASE_URL` and `KAFKA_BROKERS`. Its Kafka username, password, and CA certificate are optional for local Redpanda and required only for a secured hosted Kafka setup.
+
+### Web: `apps/web/.env.local`
+
+Set the browser-facing API URL for local development:
+
+```dotenv
+NEXT_PUBLIC_API_BASE_URL=http://localhost:4000
+```
+
+This value is compiled into the browser bundle. Restart the Next.js development server after changing it. If the web app is opened through Nginx on port `8081`, the API URL can instead be empty because Nginx proxies `/api` requests.
+
+## Development Workflow
+
+Recommended startup order:
+
+1. Install dependencies from the repository root.
+2. Start PostgreSQL, Redis, and Redpanda.
+3. Apply Prisma migrations and seed roles.
+4. Confirm the API and worker environment files point to the same services.
+5. Start the API.
+6. Start the worker.
+7. Start the web app.
+8. Open the web page and place a test order.
+
+The API must start before the browser can load products. The worker must start before an order can move from `PENDING` to `CONFIRMED`.
+
+## Known Limitations
+
+- The cart can contain multiple products, but checkout submits only the first cart item.
+- There are no automated unit, integration, or end-to-end tests yet.
+- Authentication tables exist, but there are no registration, login, session, password-reset, or authorization routes.
+- Current routes use `pg`; Prisma runtime queries are not yet the source of the product/order implementation.
+- The API and worker do not yet have complete graceful-shutdown handling.
+- Error handling for unavailable PostgreSQL, Redis, and Redpanda is still basic.
+- Nginx is a local development proxy, not a production deployment configuration.
+- The Dockerfiles build the API and worker separately and do not run migrations automatically. Apply database migrations explicitly before relying on newly added Prisma tables.
+
+## Next Sensible Steps
+
+1. Add tests for health, product caching, order validation, event publication, and worker confirmation.
+2. Finish moving product and order queries from `pg` to Prisma, or document a deliberate decision to keep both layers.
+3. Implement authentication and authorization around the existing user and role models.
+4. Change the order contract to support multiple cart items.
+5. Add reliable error handling, retries, and graceful shutdown for all long-running processes.
+6. Add CI checks for typechecking, linting, builds, migrations, and tests.
+7. Define a production deployment topology before expanding Nginx or container configuration.
 
 ## Working Agreements
 
 - Keep application code inside the relevant workspace under `apps/`.
-- Update this file when the repository moves from scaffold to implemented behavior.
-- Keep `README.md` focused on getting a new developer running quickly; keep design and implementation context here.
-- Do not document a service as available until there is a runnable command and a verified health check.
+- Keep quick-start commands and prerequisites in `README.md`.
+- Keep implementation context, limitations, and architecture decisions here.
+- Never document a service as complete unless its command and health check have been verified.
+- Never commit passwords, hosted database URLs, Kafka credentials, certificates, or other secrets.

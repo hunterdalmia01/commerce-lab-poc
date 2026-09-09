@@ -17,7 +17,7 @@ node --version
 npm --version
 ```
 
-Docker is required to run the API and worker because the API initializes PostgreSQL and connects to Redpanda during startup, while product detail requests use Redis. Docker is not required to view the standalone web scaffold.
+Docker is required for the recommended local setup because PostgreSQL, Redis, and Redpanda run as local services. Docker is not required to view the web app, but the product list and checkout need a running API and its dependencies.
 
 ## First-Time Setup
 
@@ -29,16 +29,16 @@ npm install
 
 The root package is an npm workspace, so one install sets up dependencies for `apps/web`, `apps/api`, and `apps/worker`.
 
-The API still uses the `pg` pool and startup initializer for runtime database access. Prisma is configured in `apps/api/prisma/schema.prisma` as the next persistence-layer step, but the current routes do not use the generated Prisma client yet.
+The API currently uses the `pg` pool for product and order runtime queries. Prisma provides the schema, migrations, generated client, and role seed used by the newer persistence setup.
 
 The API reads local settings from `apps/api/.env` using dotenv. Do not commit real credentials or replace local development values with shared or production secrets.
 
 ## Start Local Infrastructure
 
-Start PostgreSQL, Redis, and Redpanda from the repository root:
+Start PostgreSQL, Redis, and Redpanda from the repository root. For the recommended host-development workflow, start only these three services:
 
 ```bash
-docker compose up -d
+docker compose up -d postgres redis redpanda
 docker compose ps
 ```
 
@@ -46,7 +46,7 @@ The services are exposed on these host ports:
 
 | Service | Port | Local purpose |
 | --- | ---: | --- |
-| PostgreSQL | `5433` | Database |
+| PostgreSQL | `5432` | Database |
 | Redis | `6379` | Cache |
 | Redpanda/Kafka | `9092` | Event broker |
 
@@ -58,11 +58,32 @@ docker compose down
 
 Start these services before starting the API or worker. The API startup runs database initialization and connects its Kafka producer, so it will exit if PostgreSQL or Redpanda is unavailable.
 
+On a fresh database, apply the Prisma migrations and seed the roles before starting the API:
+
+```bash
+cd apps/api
+npx prisma migrate deploy
+npx prisma db seed
+cd ../..
+```
+
 ## Start the Apps
 
 Open four terminal windows, keeping the infrastructure and application processes running.
 
 ### Terminal 1: Web app
+
+```bash
+npm run dev:web
+```
+
+Before starting the web app, set `apps/web/.env.local` to point to the local API:
+
+```dotenv
+NEXT_PUBLIC_API_BASE_URL=http://localhost:4000
+```
+
+Then run:
 
 ```bash
 npm run dev:web
@@ -96,12 +117,22 @@ npm run dev:worker
 
 The worker subscribes to the `order.created` topic with consumer group `order-processing`. When it receives an order event, it waits 3 seconds and updates that order from `PENDING` to `CONFIRMED`.
 
-The API port defaults to `4000`. To use a different port:
+The API port defaults to `4000`. To use a different port, update `NEXT_PUBLIC_API_BASE_URL` to match it and restart the web app:
 
 ```bash
 PORT=4100 npm run dev:api
 curl http://localhost:4100/health
 ```
+
+### Optional: full Docker Compose mode
+
+To run the API, worker, and Nginx in containers as well as the infrastructure:
+
+```bash
+docker compose up -d --build
+```
+
+Open [http://localhost:8081](http://localhost:8081). Do not also run `npm run dev:api` or `npm run dev:worker`, because the Compose API uses port `4000` and the Compose worker consumes the same Kafka topic.
 
 ## Useful Commands
 
@@ -114,6 +145,8 @@ Run these from the repository root:
 | `npm run dev:api` | Start the Fastify API with file watching |
 | `npm run dev:worker` | Start the order-processing Kafka worker |
 | `npm exec prisma generate --workspace=apps/api` | Generate the Prisma client from the API schema |
+| `npm exec prisma migrate deploy --workspace=apps/api` | Apply committed Prisma migrations |
+| `npm exec prisma db seed --workspace=apps/api` | Seed the initial roles |
 | `npm run build --workspace=apps/api` | Compile the API to `apps/api/dist` |
 | `npm run start --workspace=apps/api` | Run the compiled API |
 | `npm run build --workspace=apps/worker` | Compile the worker |
@@ -149,7 +182,7 @@ flowchart LR
 	Worker --> Postgres
 ```
 
-The web app and API run as separate development processes. The web app calls the API using `NEXT_PUBLIC_API_BASE_URL`; leave it unset when the browser can reach the API through the same origin, or set it to `http://localhost:4000` for the default local setup. The API has active PostgreSQL, Redis, and Kafka integrations, with matching local connection settings in `apps/api/.env`. PostgreSQL uses host port `5433` because port `5432` may be occupied by a native PostgreSQL installation. The runtime still uses the `pg` pool; `apps/api/prisma/schema.prisma` mirrors the `products` and `orders` tables for the ongoing Prisma migration.
+The web app and API run as separate development processes. For direct local development, set `NEXT_PUBLIC_API_BASE_URL=http://localhost:4000`. The API has active PostgreSQL, Redis, and Kafka integrations, with matching local connection settings in `apps/api/.env`. PostgreSQL uses host port `5432`. The runtime still uses the `pg` pool for products and orders, while `apps/api/prisma/schema.prisma` contains the versioned Prisma models and migrations.
 
 ## API Routes
 
@@ -229,7 +262,9 @@ For disposable local data, recreate the database volume:
 
 ```bash
 docker compose down -v
-docker compose up -d postgres
+docker compose up -d postgres redis redpanda
+npm exec prisma migrate deploy --workspace=apps/api
+npm exec prisma db seed --workspace=apps/api
 npm run dev:api
 ```
 
