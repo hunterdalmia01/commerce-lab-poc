@@ -13,6 +13,9 @@ type CartItem = Product & {
   quantity: number;
 };
 
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
+
 export default function Home() {
   const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -24,7 +27,7 @@ export default function Home() {
   useEffect(() => {
     async function loadProducts() {
       try {
-        const response = await fetch("/api/products");
+        const response = await fetch(`${API_BASE_URL}/api/products`);
         const data = await response.json();
         setProducts(data);
       } finally {
@@ -58,7 +61,7 @@ export default function Home() {
 
     const item = cart[0];
 
-    const response = await fetch("/api/orders", {
+    const response = await fetch(`${API_BASE_URL}/api/orders`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -81,7 +84,7 @@ export default function Home() {
   }
 
   const interval = setInterval(async () => {
-    const response = await fetch(`/api/orders/${orderId}`);
+    const response = await fetch(`${API_BASE_URL}/api/orders/${orderId}`);
 
     const order = await response.json();
 
