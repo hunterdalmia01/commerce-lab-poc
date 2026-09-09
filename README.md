@@ -27,7 +27,7 @@ From the repository root:
 npm install
 ```
 
-The root package is an npm workspace, so one install sets up dependencies for both `apps/web` and `apps/api`.
+The root package is an npm workspace, so one install sets up dependencies for `apps/web`, `apps/api`, and `apps/worker`.
 
 The API reads local settings from `apps/api/.env` using dotenv. Do not commit real credentials or replace local development values with shared or production secrets.
 
@@ -66,7 +66,7 @@ Open four terminal windows, keeping the infrastructure and application processes
 npm run dev:web
 ```
 
-Open [http://localhost:3000](http://localhost:3000). This is currently the generated Next.js starter page.
+Open [http://localhost:3000](http://localhost:3000). The web app loads products from the API, supports adding products to a cart, creates an order, and polls for confirmation.
 
 ### Terminal 2: API
 
@@ -146,7 +146,7 @@ flowchart LR
 	Worker --> Postgres
 ```
 
-The web app and API run independently right now. The web app does not call the API yet. The API has active PostgreSQL, Redis, and Kafka integrations, with matching local connection settings in `apps/api/.env`. PostgreSQL uses host port `5433` because port `5432` may be occupied by a native PostgreSQL installation.
+The web app and API run as separate development processes. The web app calls the API using `NEXT_PUBLIC_API_BASE_URL`; leave it unset when the browser can reach the API through the same origin, or set it to `http://localhost:4000` for the default local setup. The API has active PostgreSQL, Redis, and Kafka integrations, with matching local connection settings in `apps/api/.env`. PostgreSQL uses host port `5433` because port `5432` may be occupied by a native PostgreSQL installation.
 
 ## API Routes
 
@@ -169,6 +169,8 @@ curl -X POST http://localhost:4000/api/orders \
 ```
 
 The request requires positive integer `productId` and `quantity`. The API initially stores the order as `PENDING`; the worker later changes it to `CONFIRMED`.
+
+The current web checkout sends the first item in the cart to this endpoint. The cart can display multiple items, but order creation currently supports one product per request.
 
 ## Order Flow
 

@@ -39,13 +39,17 @@ commerce-lab-poc/
 ```mermaid
 flowchart LR
 	Browser[Developer browser] -->|http://localhost:3000| Web[apps/web\nNext.js 16]
-	Web -. planned API calls .-> API[apps/api\nFastify]
+	Web --> API[apps/api\nFastify]
 	API --> Health[GET /health]
-	Worker[apps/worker\nreserved] -. not implemented .-> API
+	API --> DB[(PostgreSQL)]
+	API --> Cache[(Redis)]
+	API --> Events[(Redpanda/Kafka)]
+	Events --> Worker[apps/worker\nKafka consumer]
+	Worker --> DB
 	Nginx[nginx/\nreserved] -. not configured .-> Web
 ```
 
-The web app does not call the API yet, but the backend runtime path is implemented: the API initializes PostgreSQL, reads and caches products, writes orders, publishes `order.created` events, and the worker consumes those events to confirm orders.
+The web app calls the API to load products, create an order for the first cart item, and poll the order status. The backend runtime path is implemented: the API initializes PostgreSQL, reads and caches products, writes orders, publishes `order.created` events, and the worker consumes those events to confirm orders.
 
 ## Application Details
 
@@ -53,7 +57,7 @@ The web app does not call the API yet, but the backend runtime path is implement
 
 - Next.js App Router application using React and TypeScript.
 - Development server runs on `http://localhost:3000` by default.
-- The home route is `src/app/page.tsx` and is currently the generated starter page.
+- The home route is `src/app/page.tsx` and loads products, manages a client-side cart, submits orders, and polls order status.
 - `src/app/layout.tsx` sets the document language, Geist fonts, and generated-app metadata.
 - Tailwind CSS 4 is imported from `src/app/globals.css` through PostCSS.
 - Available commands: `npm run dev`, `npm run build`, `npm run start`, and `npm run lint`.
@@ -75,6 +79,7 @@ The web app does not call the API yet, but the backend runtime path is implement
 - `initDb()` creates `products` and `orders` tables and seeds three products when the products table is empty.
 - Product detail requests cache results in Redis for 5 minutes.
 - Order creation validates positive integer `productId` and `quantity`, persists a `PENDING` order, and publishes an `order.created` Kafka event.
+- `NEXT_PUBLIC_API_BASE_URL` configures the browser-facing API origin and defaults to an empty string.
 
 Current API routes:
 
@@ -119,9 +124,10 @@ The root `package.json` declares `apps/*` as npm workspaces:
 npm install
 npm run dev:web
 npm run dev:api
+npm run dev:worker
 ```
 
-Use `docker compose up -d` directly when local infrastructure is needed. The root also has a `dev:worker` entry for the intended future worker, but it cannot be used until `apps/worker` has a package and a `dev` script.
+Use `npm run dev:worker` after the API and infrastructure are running. Use `docker compose up -d` directly when local infrastructure is needed.
 
 ## Intended Evolution
 
@@ -139,15 +145,15 @@ flowchart TD
 	Nginx --> API
 ```
 
-The web-to-API UI integration and Nginx layer are still future work. The API-to-PostgreSQL, API-to-Redis, API-to-Redpanda, and worker-to-PostgreSQL paths shown above are implemented.
+The web-to-API UI integration, API-to-PostgreSQL, API-to-Redis, API-to-Redpanda, and worker-to-PostgreSQL paths shown above are implemented. Nginx remains future work, and worker-side cache updates are a possible evolution of the current flow.
 
 ## Suggested Next Steps
 
-1. Replace the generated web page with a client for the product and order APIs.
-2. Add API and worker tests for the health check, cache behavior, order validation, event publication, and confirmation flow.
-3. Add shared event schemas and stronger error handling around database, Redis, and Kafka failures.
-4. Add environment example files and document production-safe secrets handling.
-5. Add graceful shutdown for Fastify, PostgreSQL, Redis, Kafka producer, and worker consumer.
+1. Add API and worker tests for the health check, cache behavior, order validation, event publication, and confirmation flow.
+2. Add shared event schemas and stronger error handling around database, Redis, and Kafka failures.
+3. Add environment example files and document production-safe secrets handling.
+4. Add graceful shutdown for Fastify, PostgreSQL, Redis, Kafka producer, and worker consumer.
+5. Expand checkout to submit multiple cart items in one order.
 6. Add Nginx or another deployment proxy only when the deployment topology is defined.
 
 ## Working Agreements
