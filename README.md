@@ -29,6 +29,8 @@ npm install
 
 The root package is an npm workspace, so one install sets up dependencies for `apps/web`, `apps/api`, and `apps/worker`.
 
+The API still uses the `pg` pool and startup initializer for runtime database access. Prisma is configured in `apps/api/prisma/schema.prisma` as the next persistence-layer step, but the current routes do not use the generated Prisma client yet.
+
 The API reads local settings from `apps/api/.env` using dotenv. Do not commit real credentials or replace local development values with shared or production secrets.
 
 ## Start Local Infrastructure
@@ -111,6 +113,7 @@ Run these from the repository root:
 | `npm run dev:web` | Start the Next.js development server |
 | `npm run dev:api` | Start the Fastify API with file watching |
 | `npm run dev:worker` | Start the order-processing Kafka worker |
+| `npm exec prisma generate --workspace=apps/api` | Generate the Prisma client from the API schema |
 | `npm run build --workspace=apps/api` | Compile the API to `apps/api/dist` |
 | `npm run start --workspace=apps/api` | Run the compiled API |
 | `npm run build --workspace=apps/worker` | Compile the worker |
@@ -125,7 +128,7 @@ Run these from the repository root:
 
 ```text
 apps/web    Next.js frontend
-apps/api    Fastify backend, PostgreSQL access, Redis cache, and Kafka producer
+apps/api    Fastify backend, PostgreSQL access, Prisma schema, Redis cache, and Kafka producer
 apps/worker  Kafka consumer that confirms orders
 nginx       Reserved for future reverse-proxy configuration
 docker-compose.yml  Optional PostgreSQL, Redis, and Redpanda services
@@ -146,7 +149,7 @@ flowchart LR
 	Worker --> Postgres
 ```
 
-The web app and API run as separate development processes. The web app calls the API using `NEXT_PUBLIC_API_BASE_URL`; leave it unset when the browser can reach the API through the same origin, or set it to `http://localhost:4000` for the default local setup. The API has active PostgreSQL, Redis, and Kafka integrations, with matching local connection settings in `apps/api/.env`. PostgreSQL uses host port `5433` because port `5432` may be occupied by a native PostgreSQL installation.
+The web app and API run as separate development processes. The web app calls the API using `NEXT_PUBLIC_API_BASE_URL`; leave it unset when the browser can reach the API through the same origin, or set it to `http://localhost:4000` for the default local setup. The API has active PostgreSQL, Redis, and Kafka integrations, with matching local connection settings in `apps/api/.env`. PostgreSQL uses host port `5433` because port `5432` may be occupied by a native PostgreSQL installation. The runtime still uses the `pg` pool; `apps/api/prisma/schema.prisma` mirrors the `products` and `orders` tables for the ongoing Prisma migration.
 
 ## API Routes
 

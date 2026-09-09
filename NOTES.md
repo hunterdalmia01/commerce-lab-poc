@@ -16,6 +16,8 @@ commerce-lab-poc/
 │   │   ├── src/db.ts           # PostgreSQL pool
 │   │   ├── src/redis.ts        # Redis client
 │   │   └── src/kafka.ts        # Kafka producer
+│   │   ├── prisma/schema.prisma # Prisma model definitions
+│   │   ├── prisma.config.ts     # Prisma schema and migration configuration
 │   │   ├── .env                # Local API/infrastructure connection settings
 │   │   └── package.json        # API dependencies and dev command
 │   ├── web/
@@ -77,6 +79,8 @@ The web app calls the API to load products, create an order for the first cart i
 - `tsx watch` restarts the server when TypeScript source files change.
 - `npm run build` compiles `src/` to `dist/`; `npm run start` runs the compiled server.
 - `initDb()` creates `products` and `orders` tables and seeds three products when the products table is empty.
+- `prisma/schema.prisma` defines matching `products` and `orders` models, and `prisma.config.ts` points Prisma at the schema and future migrations directory.
+- Prisma client generation is available with `npm exec prisma generate --workspace=apps/api`, but the API routes still use the `pg` pool and have not yet migrated to Prisma runtime queries.
 - Product detail requests cache results in Redis for 5 minutes.
 - Order creation validates positive integer `productId` and `quantity`, persists a `PENDING` order, and publishes an `order.created` Kafka event.
 - `NEXT_PUBLIC_API_BASE_URL` configures the browser-facing API origin and defaults to an empty string.
