@@ -25,3 +25,50 @@ model products {
   created_at  DateTime? @default(now()) @db.Timestamp(6)
   orders      orders[]
 }
+
+model User {
+  id                  String     @id @default(uuid())
+  email               String     @unique
+  passwordHash        String?    @map("password_hash")
+  firstName           String?    @map("first_name")
+  lastName            String?    @map("last_name")
+  emailVerified       Boolean    @default(false) @map("email_verified")
+  status              UserStatus @default(ACTIVE)
+  mfaEnabled          Boolean    @default(false) @map("mfa_enabled")
+  failedLoginAttempts Int        @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime?  @map("locked_until")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  roles UserRole[]
+
+  @@map("users")
+}
+
+model Role {
+  id   Int    @id @default(autoincrement())
+  code String @unique
+
+  users UserRole[]
+
+  @@map("roles")
+}
+
+model UserRole {
+  userId String @map("user_id")
+  roleId Int    @map("role_id")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+enum UserStatus {
+  ACTIVE
+  LOCKED
+  SUSPENDED
+  DELETED
+}
