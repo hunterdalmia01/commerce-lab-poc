@@ -1,7 +1,4 @@
 import "dotenv/config";
-
-import fs from "node:fs";
-import path from "node:path";
 import { Kafka } from "kafkajs";
 import pg from "pg";
 
@@ -22,30 +19,30 @@ const caPath =
 
 const username = process.env.KAFKA_USERNAME;
 const password = process.env.KAFKA_PASSWORD;
+const caCert = process.env.KAFKA_CA_CERT;
+
+const isCloudKafka =
+  Boolean(username) &&
+  Boolean(password) &&
+  Boolean(caCert);
+
 
 const kafka = new Kafka({
   clientId: "commerce-worker",
   brokers,
-  ssl: username && password
+  ssl: isCloudKafka
     ? {
         rejectUnauthorized: true,
-        ca: [
-          fs.readFileSync(
-            path.resolve(process.cwd(), caPath),
-            "utf8",
-          ),
-        ],
+        ca: [caCert!],
       }
     : false,
-
-  ...(username &&
-    password && {
-      sasl: {
-        mechanism: "plain" as const,
-        username,
-        password,
-      },
-    }),
+  ...(isCloudKafka && {
+    sasl: {
+      mechanism: "plain" as const,
+      username: username!,
+      password: password!,
+    },
+  }),
 });
 
 

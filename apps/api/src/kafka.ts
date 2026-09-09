@@ -1,6 +1,4 @@
 import { Kafka } from "kafkajs";
-import fs from "node:fs";
-import path from "node:path";
 
 const brokers =
   process.env.KAFKA_BROKERS?.split(",") ??
@@ -8,8 +6,12 @@ const brokers =
 
 const username = process.env.KAFKA_USERNAME;
 const password = process.env.KAFKA_PASSWORD;
+const caCert = process.env.KAFKA_CA_CERT;
 
-const useCloudKafka = Boolean(username && password);
+const isAiven =
+  Boolean(username) &&
+  Boolean(password) &&
+  Boolean(caCert);
 
 const caPath =
   process.env.KAFKA_CA_PATH ??
@@ -19,19 +21,14 @@ const caPath =
 const kafkaClient = new Kafka({
   clientId: "commerce-lab-api",
   brokers,
-  ssl: useCloudKafka
+  ssl: isAiven
     ? {
         rejectUnauthorized: true,
-        ca: [
-          fs.readFileSync(
-            path.resolve(process.cwd(), caPath),
-            "utf8",
-          ),
-        ],
+        ca: [caCert!],
       }
     : false,
 
-  ...(useCloudKafka && {
+  ...(isAiven && {
     sasl: {
       mechanism: "plain" as const,
       username: username!,
